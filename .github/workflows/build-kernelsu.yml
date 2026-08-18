@@ -134,6 +134,7 @@ jobs:
         run: |
           set -e
           python3 fix_vermagic.py out/kernelsu.ko "$TARGET_VERMAGIC" out/kernelsu-6.12.58-fixed.ko
+          rm -f out/kernelsu.ko
           cp out/kernelsu-6.12.58-fixed.ko out/kernelsu.ko
           echo "=== modinfo (vermagic 适配后) ==="
           (modinfo out/kernelsu-6.12.58-fixed.ko 2>/dev/null | grep -E "vermagic|name" || true)
