@@ -102,23 +102,51 @@ def main():
             sys.exit(2)
         off, size = sec
         seg = data[off:off + size]
-        # 段内最后一个非零字节 (内容末尾)
         last = 0
         for i in range(size):
             if seg[i] != 0:
                 last = i
-        free_start = last + 1  # 从这之后是零填充
+        free_start = last + 1
         free = size - free_start
         need = len(new_vermagic) + 1
         print("[*] .modinfo 段: offset=%d size=%d, 已用=%d, 空闲=%d B" % (off, size, free_start, free))
-        if need > free:
-            print("[-] ERROR: .modinfo 段空闲空间不足 (%d B needed, %d free)." % (need, free))
-            sys.exit(2)
-        p = bytearray(data)
-        entry = b"vermagic=" + new_vermagic + b"\x00"
-        p[off + free_start:off + free_start + len(entry)] = entry
-        patched = bytes(p)
-        print("[+] vermagic 条目已追加到 .modinfo 段")
+        if need <= free:
+            p = bytearray(data)
+            entry = b"vermagic=" + new_vermagic + b"\x00"
+            p[off + free_start:off + free_start + len(entry)] = entry
+            patched = bytes(p)
+            print("[+] vermagic 条目已追加到 .modinfo 段")
+        else:
+            # ---- 模式3: 空闲不足, 扩展 .modinfo 段(移到文件末尾) ----
+            print("[*] 空闲不足, 扩展 .modinfo 段: 复制到文件末尾并更新 section header")
+            entry = b"vermagic=" + new_vermagic + b"\x00"
+            new_content = seg + entry  # 原内容 + 新条目
+            # 对齐到 8 字节
+            align = (len(data) + 7) & ~7
+            new_off = align
+            p = bytearray(data)
+            p += b"\x00" * (new_off - len(data))
+            p += new_content
+            # 更新 section header (.modinfo)
+            endian = "<" if data[5] == 1 else ">"
+            e_shoff = struct.unpack_from(endian + "Q", data, 40)[0]
+            e_shentsize = struct.unpack_from(endian + "H", data, 58)[0]
+            e_shnum = struct.unpack_from(endian + "H", data, 60)[0]
+            e_shstrndx = struct.unpack_from(endian + "H", data, 62)[0]
+            shstr_off = struct.unpack_from(endian + "Q", data, e_shoff + e_shstrndx * e_shentsize + 24)[0]
+            shstr_size = struct.unpack_from(endian + "Q", data, e_shoff + e_shstrndx * e_shentsize + 32)[0]
+            shstr = data[shstr_off:shstr_off + shstr_size]
+            for i in range(e_shnum):
+                sh = e_shoff + i * e_shentsize
+                name_off = struct.unpack_from(endian + "I", data, sh)[0]
+                name = cstr(shstr, name_off)
+                if name == b".modinfo":
+                    struct.pack_into(endian + "Q", p, sh + 24, new_off)   # sh_offset
+                    struct.pack_into(endian + "Q", p, sh + 32, len(new_content))  # sh_size
+                    print("[+] .modinfo 段已扩展: offset=%d size=%d" % (new_off, len(new_content)))
+                    break
+            patched = bytes(p)
+            print("[+] vermagic 条目已随段扩展写入")
 
     with open(out_ko, "wb") as f:
         f.write(patched)
