@@ -78,10 +78,18 @@ jobs:
               echo "=== 手动生成 SELinux flask.h / av_permissions.h ==="
               ./scripts/selinux/genheaders/genheaders security/selinux/include/flask.h security/selinux/include/av_permissions.h
               ls -la security/selinux/include/flask.h security/selinux/include/av_permissions.h 2>&1 || true
+              # 借用 DDK 标准 GKI 的 Module.symvers 供 modpost 解析符号
+              # (KMI 冻结下 CRC 一致; 若不一致则上机报 CRC mismatch, 即 KMI 不兼容的直接证据)
+              if [ -f "$KERNEL_SRC/Module.symvers" ]; then
+                echo "=== 借用标准 GKI Module.symvers: $KERNEL_SRC/Module.symvers ==="
+                cp "$KERNEL_SRC/Module.symvers" /workspace/xiaomi-kernel/Module.symvers
+              else
+                echo "WARNING: \$KERNEL_SRC/Module.symvers 不存在"
+              fi
               KDIR=/workspace/xiaomi-kernel
-              echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko ==="
+              echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko (KBUILD_MODPOST_WARN=1) ==="
               cd /workspace/KernelSU/kernel
-              CONFIG_KSU=m CC=clang make KDIR="$KDIR"
+              CONFIG_KSU=m CC=clang KBUILD_MODPOST_WARN=1 make KDIR="$KDIR"
             else
               echo "=== [gki] DDK 标准 KDIR, 编译 kernelsu.ko ==="
               CONFIG_KSU=m CC=clang make
