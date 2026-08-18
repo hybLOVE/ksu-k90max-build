@@ -56,6 +56,42 @@ def find_modinfo_section(data):
     return None
 
 
+def hide_versions_section(data):
+    """把 __versions 段改名为空 + sh_size 置 0, 让内核 find_sec('__versions') 返回 0,
+    check_version 直接放行, 跳过 modversions CRC 校验。返回修改后的 bytes。"""
+    if data[:4] != b"\x7fELF":
+        return data
+    endian = "<" if data[5] == 1 else ">"
+    e_shoff = struct.unpack_from(endian + "Q", data, 40)[0]
+    e_shentsize = struct.unpack_from(endian + "H", data, 58)[0]
+    e_shnum = struct.unpack_from(endian + "H", data, 60)[0]
+    e_shstrndx = struct.unpack_from(endian + "H", data, 62)[0]
+    if e_shstrndx >= e_shnum:
+        return data
+    shstr_off = struct.unpack_from(endian + "Q", data, e_shoff + e_shstrndx * e_shentsize + 24)[0]
+    shstr_size = struct.unpack_from(endian + "Q", data, e_shoff + e_shstrndx * e_shentsize + 32)[0]
+    shstr = data[shstr_off:shstr_off + shstr_size]
+    p = bytearray(data)
+    found = False
+    for i in range(e_shnum):
+        sh = e_shoff + i * e_shentsize
+        name_off = struct.unpack_from(endian + "I", data, sh)[0]
+        if name_off >= len(shstr):
+            continue
+        end = shstr.find(b"\x00", name_off)
+        if end < 0:
+            continue
+        name = shstr[name_off:end]
+        if name == b"__versions":
+            struct.pack_into(endian + "I", p, sh + 0, 0)   # sh_name -> 0 (空名, find_sec 找不到)
+            struct.pack_into(endian + "Q", p, sh + 32, 0)  # sh_size -> 0 (双保险)
+            print("[+] __versions 段已隐藏 (sh_name=0, sh_size=0): 内核将跳过 modversions CRC 校验")
+            found = True
+    if not found:
+        print("[*] 未找到 __versions 段(无 modversions 信息, 无需隐藏)")
+    return bytes(p)
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -164,6 +200,13 @@ def main():
     with open(out_ko, "wb") as f:
         f.write(patched)
     print("[+] written: %s (%d B)" % (out_ko, len(patched)))
+
+    # 隐藏 __versions 段: 内核 check_version 因 versindex==0 直接放行, 跳过 modversions CRC 校验
+    # (借用标准 GKI Module.symvers 的 CRC 与小米定制内核不一致, 加载报 "disagrees about version of symbol module_layout")
+    patched = hide_versions_section(patched)
+    with open(out_ko, "wb") as f:
+        f.write(patched)
+    print("[+] written (__versions 处理): %s (%d B)" % (out_ko, len(patched)))
 
     # 校验
     data2 = open(out_ko, "rb").read()
