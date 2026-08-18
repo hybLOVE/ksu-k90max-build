@@ -2,16 +2,24 @@ name: Build K90Max kernelsu.ko
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: '内核源码来源: xiaomi (bsp-prague-w-oss 专用 KMI) / gki (DDK 标准)'
+        type: choice
+        default: xiaomi
+        options: [xiaomi, gki]
   push:
     branches: [main]
 
 env:
   DDK_IMAGE: ghcr.io/ylarod/ddk-min:android16-6.12-20260313
   KSU_REF: v3.2.5
+  # 设备实际内核 vermagic 目标 (红米K90Max 6.12.58 HyperOS 定制)
+  TARGET_VERMAGIC: 6.12.58-android16-6-g3690567af937-abogki504922916-4k SMP preempt mod_unload modversions aarch64
 
 jobs:
   build-kernelsu-ko:
-    name: Build kernelsu.ko (android16-6.12 / DDK cached)
+    name: Build kernelsu.ko (${{ inputs.source || 'xiaomi' }} KMI)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout KernelSU
@@ -21,7 +29,15 @@ jobs:
           ref: ${{ env.KSU_REF }}
           path: KernelSU
 
-      # 缓存 DDK 镜像: 命中后 docker load 秒级恢复, 免去每次重新 pull 数 GB
+      - name: Checkout Xiaomi kernel source (bsp-prague-w-oss)
+        if: ${{ inputs.source == 'xiaomi' }}
+        uses: actions/checkout@v4
+        with:
+          repository: MiCode/Xiaomi_Kernel_OpenSource
+          ref: bsp-prague-w-oss
+          path: xiaomi-kernel
+
+      # 缓存 DDK 镜像: 命中后 docker load 秒级恢复
       - name: Cache DDK image
         id: ddk-cache
         uses: actions/cache@v4
@@ -37,7 +53,6 @@ jobs:
           else
             echo "==> 首次运行, 拉取 DDK 镜像 $DDK_IMAGE"
             docker pull "$DDK_IMAGE"
-            echo "==> 保存镜像到缓存"
             docker save -o /tmp/ddk-image.tar "$DDK_IMAGE"
             ls -lh /tmp/ddk-image.tar
           fi
@@ -47,25 +62,47 @@ jobs:
           set -e
           git config --global --add safe.directory '*'
           mkdir -p out
+          SOURCE_MODE="${{ inputs.source || 'xiaomi' }}"
+          echo "==> 内核源码来源: $SOURCE_MODE"
           docker run --rm --privileged \
             -v "$PWD:/workspace" -w /workspace \
-            "$DDK_IMAGE" /bin/bash -c "
-              set -e
+            "$DDK_IMAGE" /bin/bash -c '
+            set -e
+            cd /workspace/KernelSU/kernel
+            if [ "$1" = "xiaomi" ]; then
+              echo "=== [xiaomi] 准备小米内核源码 (bsp-prague-w-oss) ==="
+              cd /workspace/xiaomi-kernel
+              # GKI defconfig + prepare 生成编译所需头文件/符号表(不编 vmlinux, 省内存)
+              make ARCH=arm64 CC=clang LLVM=1 gki_defconfig || make ARCH=arm64 CC=clang LLVM=1 defconfig || true
+              make ARCH=arm64 CC=clang LLVM=1 prepare || true
+              KDIR=/workspace/xiaomi-kernel
+              echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko ==="
               cd /workspace/KernelSU/kernel
-              echo '=== Building kernelsu.ko for KMI android16-6.12 (DDK) ==='
+              CONFIG_KSU=m CC=clang make KDIR="$KDIR" || CONFIG_KSU=m CC=clang make
+            else
+              echo "=== [gki] DDK 标准 KDIR, 编译 kernelsu.ko ==="
               CONFIG_KSU=m CC=clang make
-              echo '=== Build completed ==='
-              cp kernelsu.ko /workspace/out/android16-6.12_kernelsu.ko
-            "
+            fi
+            echo "=== Build completed ==="
+            cp kernelsu.ko /workspace/out/kernelsu.ko
+          ' -- "$SOURCE_MODE"
           ls -la out/
-          echo "Size: $(du -h out/android16-6.12_kernelsu.ko | cut -f1)"
-          (llvm-strip -d out/android16-6.12_kernelsu.ko || strip -d out/android16-6.12_kernelsu.ko || true)
-          echo "Size after strip: $(du -h out/android16-6.12_kernelsu.ko | cut -f1)"
-          echo "=== modinfo ==="
-          (modinfo out/android16-6.12_kernelsu.ko 2>/dev/null || true)
+          echo "Size: $(du -h out/kernelsu.ko | cut -f1)"
+          (llvm-strip -d out/kernelsu.ko || strip -d out/kernelsu.ko || true)
+          echo "=== modinfo (编译后) ==="
+          (modinfo out/kernelsu.ko 2>/dev/null || true)
+
+      - name: Fix vermagic for device kernel (6.12.58-abogki)
+        run: |
+          set -e
+          python3 fix_vermagic.py out/kernelsu.ko "$TARGET_VERMAGIC" out/kernelsu-6.12.58-fixed.ko
+          cp out/kernelsu-6.12.58-fixed.ko out/kernelsu.ko
+          echo "=== modinfo (vermagic 适配后) ==="
+          (modinfo out/kernelsu-6.12.58-fixed.ko 2>/dev/null | grep -E "vermagic|name" || true)
+          ls -la out/
 
       - name: Upload kernelsu.ko
         uses: actions/upload-artifact@v4
         with:
-          name: kernelsu-ko-android16-6.12
+          name: kernelsu-ko-${{ inputs.source || 'xiaomi' }}-6.12.58-fixed
           path: out/
