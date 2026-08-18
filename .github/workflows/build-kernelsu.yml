@@ -5,41 +5,64 @@ on:
   push:
     branches: [main]
 
+env:
+  DDK_IMAGE: ghcr.io/ylarod/ddk-min:android16-6.12-20260313
+  KSU_REF: v3.2.5
+
 jobs:
   build-kernelsu-ko:
-    name: Build kernelsu.ko (android16-6.12 / DDK)
+    name: Build kernelsu.ko (android16-6.12 / DDK cached)
     runs-on: ubuntu-latest
-    container:
-      # Ylarod DDK 容器: 预装标准 GKI android16-6.12 内核源码 + Clang 工具链
-      # KernelSU 官方 ddk-lkm.yml 同款镜像/流程
-      image: ghcr.io/ylarod/ddk-min:android16-6.12-20260313
-      options: --privileged
     steps:
-      - name: Checkout KernelSU (kernel source)
+      - name: Checkout KernelSU
         uses: actions/checkout@v4
         with:
           repository: tiann/KernelSU
-          ref: v3.2.5
+          ref: ${{ env.KSU_REF }}
           path: KernelSU
 
-      - name: Build kernelsu.ko
+      # 缓存 DDK 镜像: 命中后 docker load 秒级恢复, 免去每次重新 pull 数 GB
+      - name: Cache DDK image
+        id: ddk-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ddk-image.tar
+          key: ddk-image-${{ env.DDK_IMAGE }}
+
+      - name: Load or pull DDK image
+        run: |
+          if [ -f /tmp/ddk-image.tar ]; then
+            echo "==> DDK 镜像命中缓存, docker load 秒级恢复"
+            docker load -i /tmp/ddk-image.tar
+          else
+            echo "==> 首次运行, 拉取 DDK 镜像 $DDK_IMAGE"
+            docker pull "$DDK_IMAGE"
+            echo "==> 保存镜像到缓存"
+            docker save -o /tmp/ddk-image.tar "$DDK_IMAGE"
+            ls -lh /tmp/ddk-image.tar
+          fi
+
+      - name: Build kernelsu.ko in DDK container
         run: |
           set -e
           git config --global --add safe.directory '*'
-          cd KernelSU/kernel
-          echo "=== Building kernelsu.ko for KMI android16-6.12 (DDK) ==="
-          CONFIG_KSU=m CC=clang make
-          echo "=== Build completed ==="
-          mkdir -p /github/workspace/out
-          cp kernelsu.ko /github/workspace/out/android16-6.12_kernelsu.ko
-          ls -la /github/workspace/out/
-          echo "Size: $(du -h /github/workspace/out/android16-6.12_kernelsu.ko | cut -f1)"
-          # strip 调试符号减小体积(可选, 失败不中断)
-          (llvm-strip -d /github/workspace/out/android16-6.12_kernelsu.ko || strip -d /github/workspace/out/android16-6.12_kernelsu.ko || true)
-          echo "Size after strip: $(du -h /github/workspace/out/android16-6.12_kernelsu.ko | cut -f1)"
-          # 输出 modinfo 供 KMI/vermagic 核对
+          mkdir -p out
+          docker run --rm --privileged \
+            -v "$PWD:/workspace" -w /workspace \
+            "$DDK_IMAGE" /bin/bash -c "
+              set -e
+              cd /workspace/KernelSU/kernel
+              echo '=== Building kernelsu.ko for KMI android16-6.12 (DDK) ==='
+              CONFIG_KSU=m CC=clang make
+              echo '=== Build completed ==='
+              cp kernelsu.ko /workspace/out/android16-6.12_kernelsu.ko
+            "
+          ls -la out/
+          echo "Size: $(du -h out/android16-6.12_kernelsu.ko | cut -f1)"
+          (llvm-strip -d out/android16-6.12_kernelsu.ko || strip -d out/android16-6.12_kernelsu.ko || true)
+          echo "Size after strip: $(du -h out/android16-6.12_kernelsu.ko | cut -f1)"
           echo "=== modinfo ==="
-          (modinfo /github/workspace/out/android16-6.12_kernelsu.ko 2>/dev/null || true)
+          (modinfo out/android16-6.12_kernelsu.ko 2>/dev/null || true)
 
       - name: Upload kernelsu.ko
         uses: actions/upload-artifact@v4
