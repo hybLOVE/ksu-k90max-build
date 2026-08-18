@@ -87,9 +87,10 @@ def main():
             print("[-] ERROR: new vermagic too long (%d B needed, %d available)." % (need, avail))
             sys.exit(2)
         p = bytearray(data)
-        for j in range(start - len(b"vermagic="), old_end + run):
+        # 保留 "vermagic=" 前缀, 只清空值区并写入新值
+        for j in range(start, old_end + run):
             p[j] = 0
-        p[start - len(b"vermagic="):start - len(b"vermagic=") + len(new_vermagic)] = new_vermagic
+        p[start:start + len(new_vermagic)] = new_vermagic
         patched = bytes(p)
         print("[+] vermagic 已替换")
 
@@ -108,19 +109,31 @@ def main():
                 last = i
         free_start = last + 1
         free = size - free_start
-        need = len(new_vermagic) + 1
-        print("[*] .modinfo 段: offset=%d size=%d, 已用=%d, 空闲=%d B" % (off, size, free_start, free))
+        # 需要追加的条目: vermagic + (缺失时的 name/depends); 条目级检查, 防误命中 kernelsu.mod.name= 子串
+        entries_list = [e for e in seg.split(b"\x00") if e.strip()]
+        has_name = any(e.startswith(b"name=") for e in entries_list)
+        has_depends = any(e.startswith(b"depends=") for e in entries_list)
+        entries = [b"vermagic=" + new_vermagic + b"\x00"]
+        if not has_name:
+            entries.append(b"name=kernelsu\x00")
+            print("[*] 缺少 name= 条目, 将追加 name=kernelsu")
+        if not has_depends:
+            entries.append(b"depends=\x00")
+            print("[*] 缺少 depends= 条目, 将追加")
+        need = sum(len(e) for e in entries)
+        print("[*] .modinfo 段: offset=%d size=%d, 已用=%d, 空闲=%d B, 需追加=%d B" % (off, size, free_start, free, need))
         if need <= free:
             p = bytearray(data)
-            entry = b"vermagic=" + new_vermagic + b"\x00"
-            p[off + free_start:off + free_start + len(entry)] = entry
+            pos = off + free_start
+            for e in entries:
+                p[pos:pos + len(e)] = e
+                pos += len(e)
             patched = bytes(p)
-            print("[+] vermagic 条目已追加到 .modinfo 段")
+            print("[+] 条目已追加到 .modinfo 段")
         else:
             # ---- 模式3: 空闲不足, 扩展 .modinfo 段(移到文件末尾) ----
             print("[*] 空闲不足, 扩展 .modinfo 段: 复制到文件末尾并更新 section header")
-            entry = b"vermagic=" + new_vermagic + b"\x00"
-            new_content = seg + entry  # 原内容 + 新条目
+            new_content = seg + b"".join(entries)  # 原内容 + 新条目
             # 对齐到 8 字节
             align = (len(data) + 7) & ~7
             new_off = align
