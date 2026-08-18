@@ -72,13 +72,13 @@ jobs:
             if [ "$1" = "xiaomi" ]; then
               echo "=== [xiaomi] 准备小米内核源码 (bsp-prague-w-oss) ==="
               cd /workspace/xiaomi-kernel
-              # GKI defconfig + prepare 生成编译所需头文件/符号表(不编 vmlinux, 省内存)
-              make ARCH=arm64 CC=clang LLVM=1 gki_defconfig || make ARCH=arm64 CC=clang LLVM=1 defconfig || true
-              make ARCH=arm64 CC=clang LLVM=1 prepare || true
+              # gki_defconfig 含 SECURITY_SELINUX, 生成 flask.h 等头文件; 失败即中断暴露真实错误
+              make ARCH=arm64 CC=clang LLVM=1 gki_defconfig
+              make ARCH=arm64 CC=clang LLVM=1 prepare
               KDIR=/workspace/xiaomi-kernel
               echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko ==="
               cd /workspace/KernelSU/kernel
-              CONFIG_KSU=m CC=clang make KDIR="$KDIR" || CONFIG_KSU=m CC=clang make
+              CONFIG_KSU=m CC=clang make KDIR="$KDIR"
             else
               echo "=== [gki] DDK 标准 KDIR, 编译 kernelsu.ko ==="
               CONFIG_KSU=m CC=clang make
