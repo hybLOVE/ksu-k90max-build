@@ -92,10 +92,24 @@ jobs:
               CONFIG_KSU=m CC=clang KBUILD_MODPOST_WARN=1 make KDIR="/workspace/xiaomi-kernel" || echo "=== make modules 部分失败, 尝试手动 modfinal ==="
               ls -la kernelsu.mod.c kernelsu.mod.o kernelsu.ko 2>/dev/null || true
               if [ ! -f kernelsu.ko ]; then
-                echo "=== 手动 modfinal: mod.o + 链接 .ko ==="
-                make -C /workspace/xiaomi-kernel M=/workspace/KernelSU/kernel src=/workspace/KernelSU/kernel kernelsu.mod.o 2>&1 | tail -3 || true
-                make -C /workspace/xiaomi-kernel M=/workspace/KernelSU/kernel src=/workspace/KernelSU/kernel kernelsu.ko 2>&1 | tail -3 || true
-                ls -la kernelsu.ko 2>/dev/null || echo "手动 modfinal 仍失败"
+                echo "=== 手动 modfinal: 编译 mod.o + ld 链接 .ko ==="
+                make -C /workspace/xiaomi-kernel M=/workspace/KernelSU/kernel src=/workspace/KernelSU/kernel kernelsu.mod.o 2>&1 | tail -2 || true
+                ls -la kernelsu.o kernelsu.mod.o 2>/dev/null || true
+                if [ -f kernelsu.o ] && [ -f kernelsu.mod.o ]; then
+                  LD_BIN=""
+                  for c in "$CLANG_PATH/bin/ld.lld" /usr/bin/ld.lld ld.lld ld; do
+                    if command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; then LD_BIN="$c"; break; fi
+                  done
+                  echo "=== 手动链接: $LD_BIN -r kernelsu.o kernelsu.mod.o -> kernelsu.ko ==="
+                  if [ -f /workspace/xiaomi-kernel/scripts/module-common.lds ]; then
+                    $LD_BIN -r -o kernelsu.ko -T /workspace/xiaomi-kernel/scripts/module-common.lds kernelsu.o kernelsu.mod.o
+                  else
+                    $LD_BIN -r -o kernelsu.ko kernelsu.o kernelsu.mod.o
+                  fi
+                  ls -la kernelsu.ko 2>/dev/null && echo "手动链接 OK" || echo "手动链接失败"
+                else
+                  echo "缺 kernelsu.o 或 kernelsu.mod.o"
+                fi
               fi
               cp -f kernelsu.ko /workspace/out/kernelsu.ko 2>/dev/null || echo "无 kernelsu.ko 产物"
               echo "=== [xiaomi] KDIR 校验 ==="
