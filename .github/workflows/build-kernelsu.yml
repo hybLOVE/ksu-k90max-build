@@ -1,0 +1,48 @@
+name: Build K90Max kernelsu.ko
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-kernelsu-ko:
+    name: Build kernelsu.ko (android16-6.12 / DDK)
+    runs-on: ubuntu-latest
+    container:
+      # Ylarod DDK 容器: 预装标准 GKI android16-6.12 内核源码 + Clang 工具链
+      # KernelSU 官方 ddk-lkm.yml 同款镜像/流程
+      image: ghcr.io/ylarod/ddk-min:android16-6.12-20260313
+      options: --privileged
+    steps:
+      - name: Checkout KernelSU (kernel source)
+        uses: actions/checkout@v4
+        with:
+          repository: tiann/KernelSU
+          ref: v3.2.5
+          path: KernelSU
+
+      - name: Build kernelsu.ko
+        run: |
+          set -e
+          git config --global --add safe.directory '*'
+          cd KernelSU/kernel
+          echo "=== Building kernelsu.ko for KMI android16-6.12 (DDK) ==="
+          CONFIG_KSU=m CC=clang make
+          echo "=== Build completed ==="
+          mkdir -p /github/workspace/out
+          cp kernelsu.ko /github/workspace/out/android16-6.12_kernelsu.ko
+          ls -la /github/workspace/out/
+          echo "Size: $(du -h /github/workspace/out/android16-6.12_kernelsu.ko | cut -f1)"
+          # strip 调试符号减小体积(可选, 失败不中断)
+          (llvm-strip -d /github/workspace/out/android16-6.12_kernelsu.ko || strip -d /github/workspace/out/android16-6.12_kernelsu.ko || true)
+          echo "Size after strip: $(du -h /github/workspace/out/android16-6.12_kernelsu.ko | cut -f1)"
+          # 输出 modinfo 供 KMI/vermagic 核对
+          echo "=== modinfo ==="
+          (modinfo /github/workspace/out/android16-6.12_kernelsu.ko 2>/dev/null || true)
+
+      - name: Upload kernelsu.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelsu-ko-android16-6.12
+          path: out/
