@@ -75,8 +75,8 @@ jobs:
               # gki_defconfig 含 SECURITY_SELINUX; 6.12 GKI 的 prepare 不再默认生成 SELinux 头, 显式触发
               make ARCH=arm64 CC=clang LLVM=1 gki_defconfig
               make ARCH=arm64 CC=clang LLVM=1 prepare
-              echo "=== 显式生成 SELinux flask.h / av_permissions.h ==="
-              make ARCH=arm64 CC=clang LLVM=1 security/selinux/include/flask.h security/selinux/include/av_permissions.h
+              echo "=== 手动生成 SELinux flask.h / av_permissions.h ==="
+              ./scripts/selinux/genheaders/genheaders security/selinux/include/flask.h security/selinux/include/av_permissions.h
               ls -la security/selinux/include/flask.h security/selinux/include/av_permissions.h 2>&1 || true
               KDIR=/workspace/xiaomi-kernel
               echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko ==="
