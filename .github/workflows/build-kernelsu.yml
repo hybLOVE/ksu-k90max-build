@@ -86,10 +86,10 @@ jobs:
               else
                 echo "WARNING: \$KERNEL_SRC/Module.symvers 不存在"
               fi
-              KDIR=/workspace/xiaomi-kernel
-              echo "=== [xiaomi] KDIR=$KDIR, 编译 kernelsu.ko (KBUILD_MODPOST_WARN=1) ==="
+              echo "=== [xiaomi] 编译 kernelsu.ko (KERNEL_SRC=小米源码, KBUILD_MODPOST_WARN=1) ==="
               cd /workspace/KernelSU/kernel
-              CONFIG_KSU=m CC=clang KBUILD_MODPOST_WARN=1 make KDIR="$KDIR"
+              export KERNEL_SRC=/workspace/xiaomi-kernel
+              CONFIG_KSU=m CC=clang KBUILD_MODPOST_WARN=1 make
             else
               echo "=== [gki] DDK 标准 KDIR, 编译 kernelsu.ko ==="
               CONFIG_KSU=m CC=clang make
